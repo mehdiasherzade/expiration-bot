@@ -822,13 +822,20 @@ def run_bot():
     )
     
     print("Trading Expiration Bot PRO v3 UI is running...")
-    application.run_polling()
+    application.run_polling(stop_signals=None)
 
 if __name__ == "__main__":
     init_db()
-    
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    
+
     port = int(os.environ.get("PORT", 5000))
-    flask_app.run(host="0.0.0.0", port=port)
+
+    bot_thread = threading.Thread(
+        target=lambda: run_bot(),
+        daemon=True
+    )
+    bot_thread.start()
+
+    flask_app.run(
+        host="0.0.0.0",
+        port=port
+    )
