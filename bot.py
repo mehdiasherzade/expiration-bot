@@ -452,7 +452,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["mode"] = "NDOG"
             await update.message.reply_text(
                 "📅 REGISTER NDOG\n\nSend the registration date.\n\nExamples:\nNDOG 18 AUG\nNDOG 18 AUG 2026\n18 AUG\n2026-08-18\n\n💡 NDOG expires after 5 trading days.",
-                reply_markup=ReplyKeyboardRemove()
+                reply_markup=dashboard_reply_keyboard()
             )
             return
 
@@ -460,7 +460,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["mode"] = "NWOG"
             await update.message.reply_text(
                 "📆 REGISTER NWOG\n\nSend the Sunday registration date.\n\nExamples:\nNWOG 16 AUG\nNWOG 16 AUG 2026\n16 AUG\n2026-08-16\n\n💡 NWOG tracks 5, 7 and 8 weeks.",
-                reply_markup=ReplyKeyboardRemove()
+                reply_markup=dashboard_reply_keyboard()
             )
             return
 
@@ -597,14 +597,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "ndog":
         context.user_data["mode"] = "NDOG"
-        await query.edit_message_text(
+        await query.message.reply_text(
             "📅 REGISTER NDOG\n\nSend the registration date.\n\nExamples:\nNDOG 18 AUG\nNDOG 18 AUG 2026\n18 AUG\n2026-08-18\n\n💡 NDOG expires after 5 trading days."
         )
         return
 
     if data == "nwog":
         context.user_data["mode"] = "NWOG"
-        await query.edit_message_text(
+        await query.message.reply_text(
             "📆 REGISTER NWOG\n\nSend the Sunday registration date.\n\nExamples:\nNWOG 16 AUG\nNWOG 16 AUG 2026\n16 AUG\n2026-08-16\n\n💡 NWOG tracks 5, 7 and 8 weeks."
         )
         return
