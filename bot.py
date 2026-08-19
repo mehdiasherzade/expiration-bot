@@ -11,12 +11,15 @@ from telegram import (
     Update,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
 )
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     ContextTypes,
+    CallbackQueryHandler,
     filters,
 )
 
@@ -265,15 +268,38 @@ def history_rows(chat_id):
     return [row for row in rows if not is_registration_active(row)]
 
 # =========================================================
-# DASHBOARD
+# KEYBOARDS (Reply + Inline)
 # =========================================================
 
-def dashboard_keyboard():
+def dashboard_reply_keyboard():
+    """Reply Keyboard - پایین صفحه تلگرام"""
     return ReplyKeyboardMarkup([
         ["📅 NDOG", "📆 NWOG"],
         ["🟢 ACTIVE", "📜 HISTORY"],
-        ["⚙️ SETTINGS"],
+        ["⚙️ SETTINGS", "❌ Close Keyboard"],
     ], resize_keyboard=True, is_persistent=True)
+
+def dashboard_inline_keyboard():
+    """Inline Keyboard - داخل پیام"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 NDOG", callback_data="ndog")],
+        [InlineKeyboardButton("📆 NWOG", callback_data="nwog")],
+        [
+            InlineKeyboardButton("🟢 ACTIVE", callback_data="active"),
+            InlineKeyboardButton("📜 HISTORY", callback_data="history"),
+        ],
+        [InlineKeyboardButton("⚙️ SETTINGS", callback_data="settings")],
+    ])
+
+def back_reply_keyboard():
+    """Reply Keyboard - برگشت به خانه"""
+    return ReplyKeyboardMarkup([
+        ["🏠 HOME"],
+    ], resize_keyboard=True, is_persistent=True)
+
+# =========================================================
+# DASHBOARD
+# =========================================================
 
 def dashboard_text(chat_id):
     active = active_rows(chat_id)
@@ -284,52 +310,30 @@ def dashboard_text(chat_id):
         f"🟢 Active: {len(active)}\n"
         f"🔴 Expired: {len(history)}\n\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "        ➕ REGISTER\n\n"
         "Track your NDOG / NWOG expirations\n"
-        "with automatic countdown & alerts."
+        "with automatic countdown & alerts.\n\n"
+        "Use buttons below or inline menu:"
     )
 
-async def send_dashboard(update: Update, edit=False):
+async def send_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE, edit=False):
     chat_id = update.effective_chat.id
     text = dashboard_text(chat_id)
-    if update.message:
-        await update.message.reply_text(text, reply_markup=dashboard_keyboard())
+    
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            reply_markup=dashboard_inline_keyboard()
+        )
+    elif update.message:
+        await update.message.reply_text(
+            text,
+            reply_markup=dashboard_reply_keyboard()
+        )
     elif update.callback_query:
-        await update.callback_query.message.reply_text(text, reply_markup=dashboard_keyboard())
-
-# =========================================================
-# REGISTER MENU
-# =========================================================
-
-def register_keyboard():
-    return ReplyKeyboardMarkup([
-        ["📅 NDOG", "📆 NWOG"],
-        ["🏠 HOME"],
-    ], resize_keyboard=True, is_persistent=True)
-
-async def register_menu(update):
-    await update.message.reply_text(
-        "➕ REGISTER NEW EXPIRATION\n\nChoose the expiration type:",
-        reply_markup=register_keyboard()
-    )
-
-# =========================================================
-# INPUT MODE
-# =========================================================
-
-async def ask_ndog(update, context):
-    context.user_data["mode"] = "NDOG"
-    await update.message.reply_text(
-        "📅 REGISTER NDOG\n\nSend the registration date.\n\nExamples:\n\nNDOG 18 AUG\nNDOG 18 AUG 2026\n18 AUG\n2026-08-18\n\n━━━━━━━━━━━━━━━━━━\n💡 NDOG expires after 5 trading days.",
-        reply_markup=ReplyKeyboardRemove()
-    )
-
-async def ask_nwog(update, context):
-    context.user_data["mode"] = "NWOG"
-    await update.message.reply_text(
-        "📆 REGISTER NWOG\n\nSend the Sunday registration date.\n\nExamples:\n\nNWOG 16 AUG\nNWOG 16 AUG 2026\n16 AUG\n2026-08-16\n\n━━━━━━━━━━━━━━━━━━\n💡 NWOG tracks 5, 7 and 8 weeks.",
-        reply_markup=ReplyKeyboardRemove()
-    )
+        await update.callback_query.message.reply_text(
+            text,
+            reply_markup=dashboard_reply_keyboard()
+        )
 
 # =========================================================
 # RENDER NDOG
@@ -382,57 +386,32 @@ def render_nwog(row):
     )
 
 # =========================================================
-# ACTIVE UI
+# VIEW DETAILS (برای Inline Keyboard)
 # =========================================================
 
-def active_keyboard():
-    return ReplyKeyboardMarkup([
-        ["🏠 HOME"],
-    ], resize_keyboard=True, is_persistent=True)
-
-def history_keyboard():
-    return ReplyKeyboardMarkup([
-        ["🏠 HOME"],
-    ], resize_keyboard=True, is_persistent=True)
-
-async def show_active(update):
-    rows = active_rows(update.effective_chat.id)
-    if not rows:
-        await update.message.reply_text(
-            "🟢 ACTIVE\n\n━━━━━━━━━━━━━━━━━━\n\nNo active registrations.\n\nRegister an NDOG or NWOG to get started.",
-            reply_markup=active_keyboard()
-        )
+async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE, registration_id: int, is_history: bool = False):
+    query = update.callback_query
+    conn = get_db()
+    row = conn.execute("""
+        SELECT * FROM registrations WHERE id=? AND chat_id=?
+    """, (registration_id, query.message.chat.id)).fetchone()
+    conn.close()
+    
+    if not row:
+        await query.edit_message_text("❌ Registration not found.")
         return
-    lines = ["🟢 ACTIVE EXPIRATIONS", "", "━━━━━━━━━━━━━━━━━━", ""]
-    for row in rows:
-        icon = "📅" if row["kind"] == "NDOG" else "📆"
-        lines.append(f"{icon} {row['display_name']}")
-    lines.extend(["", "━━━━━━━━━━━━━━━━━━", "Tap REGISTER to add another expiration."])
-    await update.message.reply_text("\n".join(lines), reply_markup=active_keyboard())
-
-async def show_history(update):
-    rows = history_rows(update.effective_chat.id)
-    if not rows:
-        await update.message.reply_text(
-            "📜 HISTORY\n\n━━━━━━━━━━━━━━━━━━\n\nNo fully expired registrations.",
-            reply_markup=history_keyboard()
-        )
-        return
-    lines = ["📜 HISTORY", "", "━━━━━━━━━━━━━━━━━━", ""]
-    for row in rows:
-        icon = "📅" if row["kind"] == "NDOG" else "📆"
-        lines.append(f"🔴 {icon} {row['display_name']}")
-    await update.message.reply_text("\n".join(lines), reply_markup=history_keyboard())
-
-# =========================================================
-# SETTINGS
-# =========================================================
-
-async def show_settings(update):
-    await update.message.reply_text(
-        f"⚙️ SETTINGS\n\n━━━━━━━━━━━━━━━━━━\n\n🌍 Timezone\n{TIMEZONE}\n\n⏰ Alert Time\n{ALERT_HOUR:02d}:{ALERT_MINUTE:02d}\n\n📈 Trading Days\nMonday — Friday\n\n📅 Weekend\nSaturday — Sunday\n\n🔔 Alerts\n• 1 Trading Day Left\n• Expiration Day\n\n━━━━━━━━━━━━━━━━━━",
-        reply_markup=dashboard_keyboard()
-    )
+    
+    if row["kind"] == "NDOG":
+        text = render_ndog(row)
+    else:
+        text = render_nwog(row)
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏠 HOME", callback_data="home")],
+        [InlineKeyboardButton("🔙 BACK", callback_data="active" if not is_history else "history")],
+    ])
+    
+    await query.edit_message_text(text, reply_markup=keyboard)
 
 # =========================================================
 # START
@@ -440,10 +419,7 @@ async def show_settings(update):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text(
-        dashboard_text(update.effective_chat.id),
-        reply_markup=dashboard_keyboard()
-    )
+    await send_dashboard(update, context)
 
 # =========================================================
 # MESSAGE HANDLER
@@ -454,28 +430,118 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     mode = context.user_data.get("mode")
 
+    # =====================================================
+    # REPLY KEYBOARD NAVIGATION
+    # =====================================================
+
     if not mode:
+        # Close Keyboard
+        if text == "❌ Close Keyboard":
+            await update.message.reply_text(
+                "⌨️ Keyboard closed. Use /start to open again.",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return
+
         if text in ("🏠 HOME", "/start"):
             context.user_data.clear()
-            await update.message.reply_text(dashboard_text(chat_id), reply_markup=dashboard_keyboard())
+            await send_dashboard(update, context)
             return
+
         if text == "📅 NDOG":
-            await ask_ndog(update, context)
+            context.user_data["mode"] = "NDOG"
+            await update.message.reply_text(
+                "📅 REGISTER NDOG\n\nSend the registration date.\n\nExamples:\nNDOG 18 AUG\nNDOG 18 AUG 2026\n18 AUG\n2026-08-18\n\n💡 NDOG expires after 5 trading days.",
+                reply_markup=ReplyKeyboardRemove()
+            )
             return
+
         if text == "📆 NWOG":
-            await ask_nwog(update, context)
+            context.user_data["mode"] = "NWOG"
+            await update.message.reply_text(
+                "📆 REGISTER NWOG\n\nSend the Sunday registration date.\n\nExamples:\nNWOG 16 AUG\nNWOG 16 AUG 2026\n16 AUG\n2026-08-16\n\n💡 NWOG tracks 5, 7 and 8 weeks.",
+                reply_markup=ReplyKeyboardRemove()
+            )
             return
+
         if text == "🟢 ACTIVE":
-            await show_active(update)
+            rows = active_rows(chat_id)
+            if not rows:
+                await update.message.reply_text(
+                    "🟢 ACTIVE\n\n━━━━━━━━━━━━━━━━━━\n\nNo active registrations.\n\nRegister an NDOG or NWOG to get started.",
+                    reply_markup=back_reply_keyboard()
+                )
+                return
+            
+            # نمایش با Reply Keyboard
+            lines = ["🟢 ACTIVE EXPIRATIONS", "", "━━━━━━━━━━━━━━━━━━", ""]
+            for row in rows:
+                icon = "📅" if row["kind"] == "NDOG" else "📆"
+                lines.append(f"{icon} {row['display_name']}")
+            lines.extend(["", "━━━━━━━━━━━━━━━━━━", "Select an expiration:"])
+            
+            # دکمه‌های Inline برای انتخاب
+            buttons = []
+            for row in rows:
+                icon = "📅" if row["kind"] == "NDOG" else "📆"
+                buttons.append([InlineKeyboardButton(
+                    f"🟢 {icon} {row['display_name']}",
+                    callback_data=f"view:{row['id']}:0"
+                )])
+            buttons.append([InlineKeyboardButton("🏠 HOME", callback_data="home")])
+            
+            await update.message.reply_text(
+                "\n".join(lines),
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
             return
+
         if text == "📜 HISTORY":
-            await show_history(update)
+            rows = history_rows(chat_id)
+            if not rows:
+                await update.message.reply_text(
+                    "📜 HISTORY\n\n━━━━━━━━━━━━━━━━━━\n\nNo fully expired registrations.",
+                    reply_markup=back_reply_keyboard()
+                )
+                return
+            
+            lines = ["📜 HISTORY", "", "━━━━━━━━━━━━━━━━━━", ""]
+            for row in rows:
+                icon = "📅" if row["kind"] == "NDOG" else "📆"
+                lines.append(f"🔴 {icon} {row['display_name']}")
+            lines.extend(["", "━━━━━━━━━━━━━━━━━━", "Select an expiration:"])
+            
+            buttons = []
+            for row in rows:
+                icon = "📅" if row["kind"] == "NDOG" else "📆"
+                buttons.append([InlineKeyboardButton(
+                    f"🔴 {icon} {row['display_name']}",
+                    callback_data=f"view:{row['id']}:1"
+                )])
+            buttons.append([InlineKeyboardButton("🏠 HOME", callback_data="home")])
+            
+            await update.message.reply_text(
+                "\n".join(lines),
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
             return
+
         if text == "⚙️ SETTINGS":
-            await show_settings(update)
+            await update.message.reply_text(
+                f"⚙️ SETTINGS\n\n━━━━━━━━━━━━━━━━━━\n\n🌍 Timezone\n{TIMEZONE}\n\n⏰ Alert Time\n{ALERT_HOUR:02d}:{ALERT_MINUTE:02d}\n\n📈 Trading Days\nMonday — Friday\n\n📅 Weekend\nSaturday — Sunday\n\n🔔 Alerts\n• 1 Trading Day Left\n• Expiration Day",
+                reply_markup=back_reply_keyboard()
+            )
             return
-        await update.message.reply_text("🤖 Please use the buttons below.", reply_markup=dashboard_keyboard())
+
+        await update.message.reply_text(
+            "🤖 Please use the buttons below.",
+            reply_markup=dashboard_reply_keyboard()
+        )
         return
+
+    # =====================================================
+    # PARSE AND REGISTER
+    # =====================================================
 
     registered = parse_trade_input(text, mode)
     if not registered:
@@ -492,7 +558,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """, (chat_id, registered.isoformat())).fetchone()
         conn.close()
         context.user_data.clear()
-        await update.message.reply_text("✅ NDOG REGISTERED\n\n" + render_ndog(row), reply_markup=dashboard_keyboard())
+        
+        await update.message.reply_text(
+            "✅ NDOG REGISTERED\n\n" + render_ndog(row),
+            reply_markup=dashboard_reply_keyboard()
+        )
         return
 
     if registered.weekday() != 6:
@@ -506,7 +576,124 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """, (chat_id, registered.isoformat())).fetchone()
     conn.close()
     context.user_data.clear()
-    await update.message.reply_text("✅ NWOG REGISTERED\n\n" + render_nwog(row), reply_markup=dashboard_keyboard())
+
+    await update.message.reply_text(
+        "✅ NWOG REGISTERED\n\n" + render_nwog(row),
+        reply_markup=dashboard_reply_keyboard()
+    )
+
+# =========================================================
+# CALLBACK QUERY HANDLER
+# =========================================================
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "home":
+        await send_dashboard(update, context, edit=True)
+        return
+
+    if data == "ndog":
+        context.user_data["mode"] = "NDOG"
+        await query.edit_message_text(
+            "📅 REGISTER NDOG\n\nSend the registration date.\n\nExamples:\nNDOG 18 AUG\nNDOG 18 AUG 2026\n18 AUG\n2026-08-18\n\n💡 NDOG expires after 5 trading days."
+        )
+        return
+
+    if data == "nwog":
+        context.user_data["mode"] = "NWOG"
+        await query.edit_message_text(
+            "📆 REGISTER NWOG\n\nSend the Sunday registration date.\n\nExamples:\nNWOG 16 AUG\nNWOG 16 AUG 2026\n16 AUG\n2026-08-16\n\n💡 NWOG tracks 5, 7 and 8 weeks."
+        )
+        return
+
+    if data == "active":
+        rows = active_rows(query.message.chat.id)
+        if not rows:
+            await query.edit_message_text(
+                "🟢 ACTIVE\n\n━━━━━━━━━━━━━━━━━━\n\nNo active registrations.\n\nRegister an NDOG or NWOG to get started.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 HOME", callback_data="home")]
+                ])
+            )
+            return
+        
+        buttons = []
+        for row in rows:
+            icon = "📅" if row["kind"] == "NDOG" else "📆"
+            buttons.append([InlineKeyboardButton(
+                f"🟢 {icon} {row['display_name']}",
+                callback_data=f"view:{row['id']}:0"
+            )])
+        buttons.append([InlineKeyboardButton("🏠 HOME", callback_data="home")])
+        
+        await query.edit_message_text(
+            "🟢 ACTIVE EXPIRATIONS\n\n━━━━━━━━━━━━━━━━━━\n\nSelect an expiration:",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+        return
+
+    if data == "history":
+        rows = history_rows(query.message.chat.id)
+        if not rows:
+            await query.edit_message_text(
+                "📜 HISTORY\n\n━━━━━━━━━━━━━━━━━━\n\nNo fully expired registrations.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 HOME", callback_data="home")]
+                ])
+            )
+            return
+        
+        buttons = []
+        for row in rows:
+            icon = "📅" if row["kind"] == "NDOG" else "📆"
+            buttons.append([InlineKeyboardButton(
+                f"🔴 {icon} {row['display_name']}",
+                callback_data=f"view:{row['id']}:1"
+            )])
+        buttons.append([InlineKeyboardButton("🏠 HOME", callback_data="home")])
+        
+        await query.edit_message_text(
+            "📜 HISTORY\n\n━━━━━━━━━━━━━━━━━━\n\nSelect an expired registration:",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+        return
+
+    if data == "settings":
+        await query.edit_message_text(
+            f"⚙️ SETTINGS\n\n━━━━━━━━━━━━━━━━━━\n\n🌍 Timezone\n{TIMEZONE}\n\n⏰ Alert Time\n{ALERT_HOUR:02d}:{ALERT_MINUTE:02d}\n\n📈 Trading Days\nMonday — Friday\n\n📅 Weekend\nSaturday — Sunday\n\n🔔 Alerts\n• 1 Trading Day Left\n• Expiration Day",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 HOME", callback_data="home")]
+            ])
+        )
+        return
+
+    # VIEW DETAILS
+    if data.startswith("view:"):
+        parts = data.split(":")
+        rid = int(parts[1])
+        is_history = parts[2] == "1"
+        await view_details(update, context, rid, is_history)
+        return
+
+    # DELETE
+    if data.startswith("del:"):
+        rid = int(data.split(":")[1])
+        conn = get_db()
+        conn.execute("DELETE FROM alerts WHERE registration_id=?", (rid,))
+        conn.execute("DELETE FROM registrations WHERE id=?", (rid,))
+        conn.commit()
+        conn.close()
+        
+        await query.edit_message_text(
+            "🗑 Registration deleted.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 HOME", callback_data="home")]
+            ])
+        )
+        return
 
 # =========================================================
 # ALERT DATABASE
@@ -621,12 +808,12 @@ async def test_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 def run_bot():
-    """ربات رو در یک ترد جداگانه اجرا کن"""
     application = Application.builder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("testalert", test_alert))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CallbackQueryHandler(callback_handler))
     
     application.job_queue.run_daily(
         check_expirations,
@@ -640,10 +827,8 @@ def run_bot():
 if __name__ == "__main__":
     init_db()
     
-    # ربات رو در ترد جداگانه اجرا کن
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
     
-    # سرور Flask رو روی پورتی که رندر میده راه‌اندازی کن
     port = int(os.environ.get("PORT", 5000))
     flask_app.run(host="0.0.0.0", port=port)
