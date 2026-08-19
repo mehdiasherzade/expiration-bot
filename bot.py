@@ -320,7 +320,7 @@ def dashboard_reply_keyboard():
         ["📅 NDOG", "📆 NWOG"],
         ["🟢 ACTIVE", "📜 HISTORY"],
         ["⚙️ SETTINGS", "❌ Close Keyboard"],
-    ], resize_keyboard=True, is_persistent=True)
+    ], resize_keyboard=True)
 
 def dashboard_inline_keyboard():
     """Inline Keyboard - داخل پیام"""
