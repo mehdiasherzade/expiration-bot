@@ -4,6 +4,7 @@ import re
 import threading
 from datetime import date, datetime, timedelta, time
 from zoneinfo import ZoneInfo
+from supabase import create_client, Client
 
 from dotenv import load_dotenv
 from flask import Flask
@@ -24,6 +25,13 @@ from telegram.ext import (
 )
 
 load_dotenv()
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase: Client = create_client(
+    SUPABASE_URL,
+    SUPABASE_KEY
+)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Tehran")
@@ -197,43 +205,60 @@ def parse_trade_input(text: str, expected_kind: str):
 # =========================================================
 
 def save_registration(chat_id: int, kind: str, registered: date):
-    conn = get_db()
     if kind == "NDOG":
         expiration = add_trading_days_after(registered, 5)
-        conn.execute("""
-            INSERT INTO registrations
-            (chat_id, kind, registered_date, display_name, ndog_expiration, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(chat_id, kind, registered_date)
-            DO UPDATE SET ndog_expiration=excluded.ndog_expiration, display_name=excluded.display_name
-        """, (
-            chat_id, kind, registered.isoformat(),
-            f"NDOG {short_date(registered)}",
-            expiration.isoformat(),
-            datetime.now(TZ).isoformat(),
-        ))
+
+        data = {
+            "chat_id": chat_id,
+            "kind": kind,
+            "registered_date": registered.isoformat(),
+            "display_name": f"NDOG {short_date(registered)}",
+            "ndog_expiration": expiration.isoformat(),
+        }
+
     else:
         e5 = weekly_expiration(registered, 5)
         e7 = weekly_expiration(registered, 7)
         e8 = weekly_expiration(registered, 8)
-        conn.execute("""
-            INSERT INTO registrations
-            (chat_id, kind, registered_date, display_name, nwog_5_expiration, nwog_7_expiration, nwog_8_expiration, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(chat_id, kind, registered_date)
-            DO UPDATE SET
-                nwog_5_expiration=excluded.nwog_5_expiration,
-                nwog_7_expiration=excluded.nwog_7_expiration,
-                nwog_8_expiration=excluded.nwog_8_expiration,
-                display_name=excluded.display_name
-        """, (
-            chat_id, kind, registered.isoformat(),
-            f"NWOG {short_date(registered)}",
-            e5.isoformat(), e7.isoformat(), e8.isoformat(),
-            datetime.now(TZ).isoformat(),
-        ))
-    conn.commit()
-    conn.close()
+
+        data = {
+            "chat_id": chat_id,
+            "kind": kind,
+            "registered_date": registered.isoformat(),
+            "display_name": f"NWOG {short_date(registered)}",
+            "nwog_5_expiration": e5.isoformat(),
+            "nwog_7_expiration": e7.isoformat(),
+            "nwog_8_expiration": e8.isoformat(),
+        }
+
+    response = (
+        supabase
+        .table("registrations")
+        .upsert(
+            data,
+            on_conflict="chat_id,kind,registered_date"
+        )
+        .execute()
+    )
+
+    return response.data[0] if response.data else None
+
+def get_registration(chat_id: int, kind: str, registered: date):
+    response = (
+        supabase
+        .table("registrations")
+        .select("*")
+        .eq("chat_id", chat_id)
+        .eq("kind", kind)
+        .eq("registered_date", registered.isoformat())
+        .limit(1)
+        .execute()
+    )
+
+    if response.data:
+        return response.data[0]
+
+    return None
 
 # =========================================================
 # REGISTRATION STATUS
@@ -241,31 +266,49 @@ def save_registration(chat_id: int, kind: str, registered: date):
 
 def is_registration_active(row):
     today = datetime.now(TZ).date()
+
     if row["kind"] == "NDOG":
         expiration = date.fromisoformat(row["ndog_expiration"])
         return expiration >= today
+
     expirations = [
         date.fromisoformat(row["nwog_5_expiration"]),
         date.fromisoformat(row["nwog_7_expiration"]),
         date.fromisoformat(row["nwog_8_expiration"]),
     ]
+
     return any(expiration >= today for expiration in expirations)
 
+
+def get_all_registrations(chat_id):
+    response = (
+        supabase
+        .table("registrations")
+        .select("*")
+        .eq("chat_id", chat_id)
+        .order("registered_date", desc=True)
+        .execute()
+    )
+
+    return response.data or []
+
+
 def active_rows(chat_id):
-    conn = get_db()
-    rows = conn.execute("""
-        SELECT * FROM registrations WHERE chat_id=? ORDER BY registered_date DESC
-    """, (chat_id,)).fetchall()
-    conn.close()
-    return [row for row in rows if is_registration_active(row)]
+    rows = get_all_registrations(chat_id)
+
+    return [
+        row for row in rows
+        if is_registration_active(row)
+    ]
+
 
 def history_rows(chat_id):
-    conn = get_db()
-    rows = conn.execute("""
-        SELECT * FROM registrations WHERE chat_id=? ORDER BY registered_date DESC
-    """, (chat_id,)).fetchall()
-    conn.close()
-    return [row for row in rows if not is_registration_active(row)]
+    rows = get_all_registrations(chat_id)
+
+    return [
+        row for row in rows
+        if not is_registration_active(row)
+    ]
 
 # =========================================================
 # KEYBOARDS (Reply + Inline)
