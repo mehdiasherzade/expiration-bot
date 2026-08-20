@@ -1176,7 +1176,7 @@ def build_alert_message(name, label, registered, expiration, level):
 # =========================================================
 
 async def check_expirations(context: ContextTypes.DEFAULT_TYPE):
-    today = datetime.now(TZ).date()
+    
 
     response = (
         supabase
@@ -1192,14 +1192,18 @@ async def check_expirations(context: ContextTypes.DEFAULT_TYPE):
         chat_id = row["chat_id"]
 
         settings = get_user_settings(chat_id)
-
+        
+        user_tz = ZoneInfo(settings.get("timezone", TIMEZONE))
+        
+        today = datetime.now(user_tz).date()
+        
         if not settings.get("alerts_enabled", True):
             continue
 
         current_hour = int(settings.get("alert_hour", ALERT_HOUR))
         current_minute = int(settings.get("alert_minute", ALERT_MINUTE))
 
-        now = datetime.now(TZ)
+        now = datetime.now(user_tz)
 
         if now.hour != current_hour or now.minute != current_minute:
             continue
