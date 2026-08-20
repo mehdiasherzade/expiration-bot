@@ -489,7 +489,12 @@ def render_nwog(row):
 # VIEW DETAILS (برای Inline Keyboard)
 # =========================================================
 
-async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE, registration_id: int, is_history: bool = False):
+async def view_details(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    registration_id: int,
+    is_history: bool = False
+):
     query = update.callback_query
 
     response = (
@@ -505,7 +510,9 @@ async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE, regis
     row = response.data[0] if response.data else None
 
     if not row:
-        await query.edit_message_text("❌ Registration not found.")
+        await query.edit_message_text(
+            "❌ Registration not found."
+        )
         return
 
     if row["kind"] == "NDOG":
@@ -527,22 +534,6 @@ async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE, regis
         text,
         reply_markup=keyboard
     )
-    
-    if not row:
-        await query.edit_message_text("❌ Registration not found.")
-        return
-    
-    if row["kind"] == "NDOG":
-        text = render_ndog(row)
-    else:
-        text = render_nwog(row)
-    
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏠 HOME", callback_data="home")],
-        [InlineKeyboardButton("🔙 BACK", callback_data="active" if not is_history else "history")],
-    ])
-    
-    await query.edit_message_text(text, reply_markup=keyboard)
 
 # =========================================================
 # START
@@ -561,35 +552,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     mode = context.user_data.get("mode")
     if mode == "SET_ALERT_TIME":
-    match = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", text)
+        match = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", text)
 
-    if not match:
+        if not match:
+            await update.message.reply_text(
+                "❌ INVALID TIME\n\n"
+                "Use 24-hour format:\n\n"
+                "09:00\n"
+                "10:30\n"
+                "18:45"
+            )
+            return
+
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+
+        update_user_settings(
+            chat_id,
+            alert_hour=hour,
+            alert_minute=minute
+        )
+
+        context.user_data.clear()
+
         await update.message.reply_text(
-            "❌ INVALID TIME\n\n"
-            "Use 24-hour format:\n\n"
-            "09:00\n"
-            "10:30\n"
-            "18:45"
+            "✅ ALERT TIME UPDATED\n\n"
+            f"⏰ New Alert Time\n{hour:02d}:{minute:02d}",
+            reply_markup=dashboard_reply_keyboard()
         )
         return
-
-    hour = int(match.group(1))
-    minute = int(match.group(2))
-
-    update_user_settings(
-        chat_id,
-        alert_hour=hour,
-        alert_minute=minute
-    )
-
-    context.user_data.clear()
-
-    await update.message.reply_text(
-        "✅ ALERT TIME UPDATED\n\n"
-        f"⏰ New Alert Time\n{hour:02d}:{minute:02d}",
-        reply_markup=dashboard_reply_keyboard()
-    )
-    return
 # =====================================================
 # MAIN MENU BUTTONS SHOULD CANCEL DATE INPUT MODE
 # =====================================================
@@ -699,7 +690,7 @@ if mode and text in main_menu_buttons:
                 settings_text(chat_id),
                 reply_markup=settings_inline_keyboard()
             )
-            returnn
+            return
 
         await update.message.reply_text(
             "🤖 Please use the buttons below.",
@@ -888,16 +879,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=settings_inline_keyboard()
         )
         return
+
     if data == "toggle_alerts":
-    chat_id = query.message.chat.id
+        chat_id = query.message.chat.id
 
-    settings = get_user_settings(chat_id)
-    current_status = settings.get("alerts_enabled", True)
+        settings = get_user_settings(chat_id)
+        current_status = settings.get("alerts_enabled", True)
 
-    update_user_settings(
-        chat_id,
-        alerts_enabled=not current_status
-    )
+        update_user_settings(
+            chat_id,
+            alerts_enabled=not current_status
+        )
+
+        await query.edit_message_text(
+            settings_text(chat_id),
+            reply_markup=settings_inline_keyboard()
+        )
+        return
+
     if data == "set_alert_time":
         context.user_data["mode"] = "SET_ALERT_TIME"
 
@@ -911,11 +910,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🔙 Send /cancel to cancel."
         )
         return
-    await query.edit_message_text(
-        settings_text(chat_id),
-        reply_markup=settings_inline_keyboard()
-    )
-    return
 
     # VIEW DETAILS
     if data.startswith("view:"):
