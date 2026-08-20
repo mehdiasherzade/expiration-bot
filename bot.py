@@ -1032,7 +1032,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=settings_inline_keyboard()
         )
         return
-        if data == "set_timezone":
+    if data == "set_timezone":
         await query.edit_message_text(
             "🌍 SELECT TIMEZONE\n\n"
             "Choose your timezone:",
@@ -1047,7 +1047,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             ZoneInfo(timezone)
         except Exception:
-            await query.answer("❌ Invalid timezone", show_alert=True)
+            await query.answer(
+                "❌ Invalid timezone", 
+                show_alert=True
+            )
             return
 
         update_user_settings(
