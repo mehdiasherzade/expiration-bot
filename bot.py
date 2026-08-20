@@ -594,28 +594,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if mode == "NDOG":
-    save_registration(chat_id, "NDOG", registered)
+        save_registration(chat_id, "NDOG", registered)
 
-    row = get_registration(
-        chat_id,
-        "NDOG",
-        registered
-    )
+        row = get_registration(
+            chat_id,
+            "NDOG",
+            registered
+        )
 
-    context.user_data.clear()
+        context.user_data.clear()
 
-    if not row:
+        if not row:
+            await update.message.reply_text(
+                "❌ خطا در دریافت اطلاعات NDOG.",
+                reply_markup=dashboard_reply_keyboard()
+            )
+            return
+
         await update.message.reply_text(
-            "❌ خطا در دریافت اطلاعات NDOG.",
+            "✅ NDOG REGISTERED\n\n" + render_ndog(row),
             reply_markup=dashboard_reply_keyboard()
         )
         return
-
-    await update.message.reply_text(
-        "✅ NDOG REGISTERED\n\n" + render_ndog(row),
-        reply_markup=dashboard_reply_keyboard()
-    )
-    return
 
     if registered.weekday() != 6:
         await update.message.reply_text("❌ NWOG ACCEPTS SUNDAYS ONLY\n\nExample:\nNWOG 16 AUG")
