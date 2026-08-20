@@ -361,17 +361,20 @@ def dashboard_text(chat_id):
 async def send_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE, edit=False):
     chat_id = update.effective_chat.id
     text = dashboard_text(chat_id)
-    
+
     if edit and update.callback_query:
-        await update.callback_query.edit_message_text(
-            text,
-            reply_markup=dashboard_inline_keyboard()
+        await update.callback_query.edit_message_text(text)
+        await update.callback_query.message.reply_text(
+            "👇 Select an option:",
+            reply_markup=dashboard_reply_keyboard()
         )
+
     elif update.message:
         await update.message.reply_text(
             text,
             reply_markup=dashboard_reply_keyboard()
         )
+
     elif update.callback_query:
         await update.callback_query.message.reply_text(
             text,
