@@ -618,16 +618,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if registered.weekday() != 6:
-        await update.message.reply_text("❌ NWOG ACCEPTS SUNDAYS ONLY\n\nExample:\nNWOG 16 AUG")
+        await update.message.reply_text(
+            "❌ NWOG ACCEPTS SUNDAYS ONLY\n\nExample:\nNWOG 16 AUG"
+        )
         return
 
     save_registration(chat_id, "NWOG", registered)
-    conn = get_db()
-    row = conn.execute("""
-        SELECT * FROM registrations WHERE chat_id=? AND kind='NWOG' AND registered_date=?
-    """, (chat_id, registered.isoformat())).fetchone()
-    conn.close()
+
+    row = get_registration(
+        chat_id,
+        "NWOG",
+        registered
+    )
+
     context.user_data.clear()
+
+    if not row:
+        await update.message.reply_text(
+            "❌ خطا در دریافت اطلاعات NWOG.",
+            reply_markup=dashboard_reply_keyboard()
+        )
+        return
 
     await update.message.reply_text(
         "✅ NWOG REGISTERED\n\n" + render_nwog(row),
