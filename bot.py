@@ -434,11 +434,42 @@ def render_nwog(row):
 
 async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE, registration_id: int, is_history: bool = False):
     query = update.callback_query
-    conn = get_db()
-    row = conn.execute("""
-        SELECT * FROM registrations WHERE id=? AND chat_id=?
-    """, (registration_id, query.message.chat.id)).fetchone()
-    conn.close()
+
+    response = (
+        supabase
+        .table("registrations")
+        .select("*")
+        .eq("id", registration_id)
+        .eq("chat_id", query.message.chat.id)
+        .limit(1)
+        .execute()
+    )
+
+    row = response.data[0] if response.data else None
+
+    if not row:
+        await query.edit_message_text("❌ Registration not found.")
+        return
+
+    if row["kind"] == "NDOG":
+        text = render_ndog(row)
+    else:
+        text = render_nwog(row)
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏠 HOME", callback_data="home")],
+        [
+            InlineKeyboardButton(
+                "🔙 BACK",
+                callback_data="active" if not is_history else "history"
+            )
+        ],
+    ])
+
+    await query.edit_message_text(
+        text,
+        reply_markup=keyboard
+    )
     
     if not row:
         await query.edit_message_text("❌ Registration not found.")
