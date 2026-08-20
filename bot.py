@@ -794,17 +794,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 def alert_was_sent(registration_id, alert_key):
-    conn = get_db()
-    row = conn.execute("SELECT 1 FROM alerts WHERE registration_id=? AND alert_key=?", (registration_id, alert_key)).fetchone()
-    conn.close()
-    return row is not None
+    response = (
+        supabase
+        .table("alerts")
+        .select("id")
+        .eq("registration_id", registration_id)
+        .eq("alert_key", alert_key)
+        .limit(1)
+        .execute()
+    )
+
+    return bool(response.data)
 
 def mark_alert_sent(registration_id, alert_key):
-    conn = get_db()
-    conn.execute("INSERT OR IGNORE INTO alerts (registration_id, alert_key, sent_at) VALUES (?, ?, ?)",
-                 (registration_id, alert_key, datetime.now(TZ).isoformat()))
-    conn.commit()
-    conn.close()
+    supabase.table("alerts").upsert(
+        {
+            "registration_id": registration_id,
+            "alert_key": alert_key,
+            "sent_at": datetime.now(TZ).isoformat()
+        },
+        on_conflict="registration_id,alert_key"
+    ).execute()
 
 # =========================================================
 # SEND ALERT
@@ -854,9 +864,15 @@ def build_alert_message(name, label, registered, expiration, level):
 
 async def check_expirations(context: ContextTypes.DEFAULT_TYPE):
     today = datetime.now(TZ).date()
-    conn = get_db()
-    rows = conn.execute("SELECT * FROM registrations").fetchall()
-    conn.close()
+
+    response = (
+        supabase
+        .table("registrations")
+        .select("*")
+        .execute()
+    )
+
+    rows = response.data or []
     for row in rows:
         registration_id = row["id"]
         name = row["display_name"]
