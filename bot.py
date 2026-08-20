@@ -924,6 +924,12 @@ def settings_inline_keyboard():
         [InlineKeyboardButton("🔔 ALERTS ON/OFF", callback_data="toggle_alerts")],
         [InlineKeyboardButton("🔙 BACK", callback_data="home")],
     ])
+def timezone_inline_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🇮🇷 IRAN — TEHRAN", callback_data="timezone:Asia/Tehran")],
+        [InlineKeyboardButton("🇺🇸 USA — NEW YORK", callback_data="timezone:America/New_York")],
+        [InlineKeyboardButton("🔙 BACK", callback_data="settings")],
+    ])
 # =========================================================
 # CALLBACK QUERY HANDLER
 # =========================================================
@@ -1026,7 +1032,34 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=settings_inline_keyboard()
         )
         return
+        if data == "set_timezone":
+        await query.edit_message_text(
+            "🌍 SELECT TIMEZONE\n\n"
+            "Choose your timezone:",
+            reply_markup=timezone_inline_keyboard()
+        )
+        return
 
+    if data.startswith("timezone:"):
+        timezone = data.split(":", 1)[1]
+
+        # بررسی معتبر بودن timezone
+        try:
+            ZoneInfo(timezone)
+        except Exception:
+            await query.answer("❌ Invalid timezone", show_alert=True)
+            return
+
+        update_user_settings(
+            query.message.chat.id,
+            timezone=timezone
+        )
+
+        await query.edit_message_text(
+            settings_text(query.message.chat.id),
+            reply_markup=settings_inline_keyboard()
+        )
+        return
     if data == "set_alert_time":
         context.user_data["mode"] = "SET_ALERT_TIME"
 
