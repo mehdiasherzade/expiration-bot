@@ -311,6 +311,60 @@ def history_rows(chat_id):
     ]
 
 # =========================================================
+# USER SETTINGS
+# =========================================================
+
+def get_user_settings(chat_id):
+    response = (
+        supabase
+        .table("settings")
+        .select("*")
+        .eq("chat_id", chat_id)
+        .limit(1)
+        .execute()
+    )
+
+    if response.data:
+        return response.data[0]
+
+    # ساخت تنظیمات پیش‌فرض برای کاربر
+    data = {
+        "chat_id": chat_id,
+        "timezone": TIMEZONE,
+        "alert_hour": ALERT_HOUR,
+        "alert_minute": ALERT_MINUTE,
+        "alerts_enabled": True,
+    }
+
+    response = (
+        supabase
+        .table("settings")
+        .upsert(
+            data,
+            on_conflict="chat_id"
+        )
+        .execute()
+    )
+
+    return response.data[0] if response.data else data
+
+
+def update_user_settings(chat_id, **changes):
+    response = (
+        supabase
+        .table("settings")
+        .upsert(
+            {
+                "chat_id": chat_id,
+                **changes
+            },
+            on_conflict="chat_id"
+        )
+        .execute()
+    )
+
+    return response.data[0] if response.data else None
+# =========================================================
 # KEYBOARDS (Reply + Inline)
 # =========================================================
 
@@ -319,7 +373,7 @@ def dashboard_reply_keyboard():
     return ReplyKeyboardMarkup([
         ["📅 NDOG", "📆 NWOG"],
         ["🟢 ACTIVE", "📜 HISTORY"],
-        ["⚙️ SETTINGS", "❌ Close Keyboard"],
+        ["⚙️ SETTINGS"],
     ], resize_keyboard=True)
 
 def dashboard_inline_keyboard():
@@ -506,20 +560,57 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     chat_id = update.effective_chat.id
     mode = context.user_data.get("mode")
+    if mode == "SET_ALERT_TIME":
+    match = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", text)
 
+    if not match:
+        await update.message.reply_text(
+            "❌ INVALID TIME\n\n"
+            "Use 24-hour format:\n\n"
+            "09:00\n"
+            "10:30\n"
+            "18:45"
+        )
+        return
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+
+    update_user_settings(
+        chat_id,
+        alert_hour=hour,
+        alert_minute=minute
+    )
+
+    context.user_data.clear()
+
+    await update.message.reply_text(
+        "✅ ALERT TIME UPDATED\n\n"
+        f"⏰ New Alert Time\n{hour:02d}:{minute:02d}",
+        reply_markup=dashboard_reply_keyboard()
+    )
+    return
+# =====================================================
+# MAIN MENU BUTTONS SHOULD CANCEL DATE INPUT MODE
+# =====================================================
+
+main_menu_buttons = {
+    "📅 NDOG",
+    "📆 NWOG",
+    "🟢 ACTIVE",
+    "📜 HISTORY",
+    "⚙️ SETTINGS",
+    "🏠 HOME",
+}
+
+if mode and text in main_menu_buttons:
+    context.user_data.clear()
+    mode = None    
     # =====================================================
     # REPLY KEYBOARD NAVIGATION
     # =====================================================
 
     if not mode:
-        # Close Keyboard
-        if text == "❌ Close Keyboard":
-            await update.message.reply_text(
-                "⌨️ Keyboard closed. Use /start to open again.",
-                reply_markup=ReplyKeyboardRemove()
-            )
-            return
-
         if text in ("🏠 HOME", "/start"):
             context.user_data.clear()
             await send_dashboard(update, context)
@@ -605,10 +696,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if text == "⚙️ SETTINGS":
             await update.message.reply_text(
-                f"⚙️ SETTINGS\n\n━━━━━━━━━━━━━━━━━━\n\n🌍 Timezone\n{TIMEZONE}\n\n⏰ Alert Time\n{ALERT_HOUR:02d}:{ALERT_MINUTE:02d}\n\n📈 Trading Days\nMonday — Friday\n\n📅 Weekend\nSaturday — Sunday\n\n🔔 Alerts\n• 1 Trading Day Left\n• Expiration Day",
-                reply_markup=back_reply_keyboard()
+                settings_text(chat_id),
+                reply_markup=settings_inline_keyboard()
             )
-            return
+            returnn
 
         await update.message.reply_text(
             "🤖 Please use the buttons below.",
@@ -679,6 +770,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=dashboard_reply_keyboard()
     )
 
+# =========================================================
+# SETTINGS MENU
+# =========================================================
+
+def settings_text(chat_id):
+    settings = get_user_settings(chat_id)
+
+    timezone = settings.get("timezone", TIMEZONE)
+    hour = settings.get("alert_hour", ALERT_HOUR)
+    minute = settings.get("alert_minute", ALERT_MINUTE)
+    alerts_enabled = settings.get("alerts_enabled", True)
+
+    alerts_status = "🟢 ON" if alerts_enabled else "🔴 OFF"
+
+    return (
+        "⚙️ SETTINGS\n\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"🌍 Timezone\n{timezone}\n\n"
+        f"⏰ Alert Time\n{hour:02d}:{minute:02d}\n\n"
+        f"🔔 Alerts\n{alerts_status}\n\n"
+        "📈 Trading Days\nMonday — Friday\n\n"
+        "📅 Weekend\nSaturday — Sunday\n\n"
+        "━━━━━━━━━━━━━━━━━━"
+    )
+
+
+def settings_inline_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🌍 TIMEZONE", callback_data="set_timezone")],
+        [InlineKeyboardButton("⏰ ALERT TIME", callback_data="set_alert_time")],
+        [InlineKeyboardButton("🔔 ALERTS ON/OFF", callback_data="toggle_alerts")],
+        [InlineKeyboardButton("🔙 BACK", callback_data="home")],
+    ])
 # =========================================================
 # CALLBACK QUERY HANDLER
 # =========================================================
@@ -760,12 +884,38 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "settings":
         await query.edit_message_text(
-            f"⚙️ SETTINGS\n\n━━━━━━━━━━━━━━━━━━\n\n🌍 Timezone\n{TIMEZONE}\n\n⏰ Alert Time\n{ALERT_HOUR:02d}:{ALERT_MINUTE:02d}\n\n📈 Trading Days\nMonday — Friday\n\n📅 Weekend\nSaturday — Sunday\n\n🔔 Alerts\n• 1 Trading Day Left\n• Expiration Day",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🏠 HOME", callback_data="home")]
-            ])
+            settings_text(query.message.chat.id),
+            reply_markup=settings_inline_keyboard()
         )
         return
+    if data == "toggle_alerts":
+    chat_id = query.message.chat.id
+
+    settings = get_user_settings(chat_id)
+    current_status = settings.get("alerts_enabled", True)
+
+    update_user_settings(
+        chat_id,
+        alerts_enabled=not current_status
+    )
+    if data == "set_alert_time":
+        context.user_data["mode"] = "SET_ALERT_TIME"
+
+        await query.edit_message_text(
+            "⏰ SET ALERT TIME\n\n"
+            "Enter the alert time in 24-hour format.\n\n"
+            "Examples:\n"
+            "09:00\n"
+            "10:30\n"
+            "18:45\n\n"
+            "🔙 Send /cancel to cancel."
+        )
+        return
+    await query.edit_message_text(
+        settings_text(chat_id),
+        reply_markup=settings_inline_keyboard()
+    )
+    return
 
     # VIEW DETAILS
     if data.startswith("view:"):
@@ -880,6 +1030,19 @@ async def check_expirations(context: ContextTypes.DEFAULT_TYPE):
         registration_id = row["id"]
         name = row["display_name"]
         chat_id = row["chat_id"]
+
+        settings = get_user_settings(chat_id)
+
+        if not settings.get("alerts_enabled", True):
+            continue
+
+        current_hour = int(settings.get("alert_hour", ALERT_HOUR))
+        current_minute = int(settings.get("alert_minute", ALERT_MINUTE))
+
+        now = datetime.now(TZ)
+
+        if now.hour != current_hour or now.minute != current_minute:
+            continue
         registered = date.fromisoformat(row["registered_date"])
         expirations = []
         if row["kind"] == "NDOG":
@@ -928,9 +1091,10 @@ def run_bot():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(callback_handler))
     
-    application.job_queue.run_daily(
+    application.job_queue.run_repeating(
         check_expirations,
-        time=time(hour=ALERT_HOUR, minute=ALERT_MINUTE, tzinfo=TZ),
+        interval=60,
+        first=10,
         name="expiration-check"
     )
     
