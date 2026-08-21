@@ -687,7 +687,15 @@ def time_converter_keyboard():
         ],
     ])
 
-
+def converter_input_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            ["🔙 BACK", "🏠 HOME"],
+        ],
+        resize_keyboard=True,
+        is_persistent=True
+    )
+    
 def time_converter_input_message(direction):
     if direction == "tehran_ny":
         return (
@@ -700,7 +708,6 @@ def time_converter_input_message(direction):
             "21 AUG 2026 18:45\n\n"
             "You can also omit the year:\n"
             "21 AUG 18:30\n\n"
-            "🔙 Send /cancel to cancel."
         )
 
     return (
@@ -713,7 +720,6 @@ def time_converter_input_message(direction):
         "21 AUG 2026 18:45\n\n"
         "You can also omit the year:\n"
         "21 AUG 18:30\n\n"
-        "🔙 Send /cancel to cancel."
     )
 
 
@@ -763,19 +769,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     mode = context.user_data.get("mode")
 
-
-
-        # =====================================================
-    # CANCEL
+    # =====================================================
+    # BACK / HOME DURING INPUT
     # =====================================================
 
-    if text.lower() == "/cancel":
+    if text == "🔙 BACK":
 
         context.user_data.clear()
 
         await update.message.reply_text(
-            "❌ CANCELLED\n\n"
-            "Returned to main menu.",
+            "🕐 TIME CONVERTER\n\n"
+            "Choose conversion direction:",
+            reply_markup=time_converter_keyboard()
+        )
+
+        return
+
+    if text == "🏠 HOME":
+
+        context.user_data.clear()
+
+        await update.message.reply_text(
+            dashboard_text(chat_id),
             reply_markup=dashboard_reply_keyboard()
         )
 
@@ -1393,6 +1408,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+
     # =====================================================
     # TIME CONVERTER
     # =====================================================
@@ -1403,10 +1419,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.edit_message_text(
             time_converter_input_message("tehran_ny")
-            
         )
-        return
 
+        await query.message.reply_text(
+            "👇 Enter the date & time:",
+            reply_markup=converter_input_reply_keyboard()
+        )
+
+        return
 
     if data == "timeconv:ny_tehran":
 
@@ -1415,40 +1435,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             time_converter_input_message("ny_tehran")
         )
-        
-        return
-    if data == "timeconv:ny_tehran":
 
-        context.user_data["mode"] = "TIME_NY_TEHRAN"
-
-        await query.edit_message_text(
-            time_converter_input_message("ny_tehran")
+        await query.message.reply_text(
+            "👇 Enter the date & time:",
+            reply_markup=converter_input_reply_keyboard()
         )
 
-        return
-    # VIEW DETAILS
-    if data.startswith("view:"):
-        parts = data.split(":")
-        rid = int(parts[1])
-        is_history = parts[2] == "1"
-        await view_details(update, context, rid, is_history)
-        return
-
-    # DELETE
-    if data.startswith("del:"):
-        rid = int(data.split(":")[1])
-        conn = get_db()
-        conn.execute("DELETE FROM alerts WHERE registration_id=?", (rid,))
-        conn.execute("DELETE FROM registrations WHERE id=?", (rid,))
-        conn.commit()
-        conn.close()
-        
-        await query.edit_message_text(
-            "🗑 Registration deleted.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🏠 HOME", callback_data="home")]
-            ])
-        )
         return
 
 # =========================================================
