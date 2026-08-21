@@ -372,6 +372,7 @@ def dashboard_reply_keyboard():
     """Reply Keyboard - پایین صفحه تلگرام"""
     return ReplyKeyboardMarkup([
         ["📅 NDOG", "📆 NWOG"],
+        ["🕐 TIME CONVERTER"],
         ["🟢 ACTIVE", "📜 HISTORY"],
         ["⚙️ SETTINGS"],
     ], resize_keyboard=True)
@@ -543,6 +544,116 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await send_dashboard(update, context)
 
+
+# =========================================================
+# TIME CONVERTER
+# =========================================================
+
+TEHRAN_TZ = ZoneInfo("Asia/Tehran")
+NEW_YORK_TZ = ZoneInfo("America/New_York")
+
+
+def parse_time_input(text: str):
+    """
+    Parse time in HH:MM or H:MM format.
+    Returns (hour, minute) or None.
+    """
+    text = text.strip()
+
+    match = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", text)
+
+    if not match:
+        return None
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+
+    return hour, minute
+
+
+def convert_time_between_zones(
+    hour: int,
+    minute: int,
+    from_tz,
+    to_tz
+):
+    """
+    Convert today's time from one timezone to another.
+
+    Returns:
+        converted_datetime
+    """
+
+    now = datetime.now(from_tz)
+
+    source_dt = datetime(
+        year=now.year,
+        month=now.month,
+        day=now.day,
+        hour=hour,
+        minute=minute,
+        tzinfo=from_tz,
+    )
+
+    return source_dt.astimezone(to_tz)
+
+
+def time_converter_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "🇮🇷 TEHRAN → 🇺🇸 NEW YORK",
+                callback_data="timeconv:tehran_ny"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🇺🇸 NEW YORK → 🇮🇷 TEHRAN",
+                callback_data="timeconv:ny_tehran"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔙 BACK",
+                callback_data="home"
+            )
+        ],
+    ])
+
+
+def format_converted_time(source_name, source_dt, target_name, target_dt):
+    """
+    Format the final conversion message.
+    """
+
+    source_date = source_dt.strftime("%d %b %Y").upper()
+    target_date = target_dt.strftime("%d %b %Y").upper()
+
+    source_time = source_dt.strftime("%H:%M")
+    target_time = target_dt.strftime("%H:%M")
+
+    if source_date == target_date:
+        day_text = "📅 SAME DAY"
+    else:
+        day_text = (
+            "📅 DATE CHANGED\n"
+            f"{source_date} → {target_date}"
+        )
+
+    return (
+        "🕐 TIME CONVERTER\n\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"🇮🇷/🇺🇸 {source_name}\n"
+        f"🕐 {source_time}\n"
+        f"📅 {source_date}\n\n"
+        "⬇️ CONVERTED TO\n\n"
+        f"🌎 {target_name}\n"
+        f"🕐 {target_time}\n"
+        f"📅 {target_date}\n\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"{day_text}"
+    )
+
 # =========================================================
 # MESSAGE HANDLER
 # =========================================================
@@ -551,6 +662,82 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     mode = context.user_data.get("mode")
 
+
+
+    # =====================================================
+    # CANCEL CURRENT MODE
+    # =====================================================
+
+    if text.lower() == "/cancel":
+
+        context.user_data.clear()
+
+        await update.message.reply_text(
+            "❌ CANCELLED\n\n"
+            "Returned to main menu.",
+            reply_markup=dashboard_reply_keyboard()
+        )
+
+        return
+    
+    # =====================================================
+    # TIME CONVERTER - ENTER TIME
+    # =====================================================
+
+    if mode in ("TIME_TEHRAN_NY", "TIME_NY_TEHRAN"):
+
+        parsed_time = parse_time_input(text)
+
+        if not parsed_time:
+            await update.message.reply_text(
+                "❌ INVALID TIME\n\n"
+                "Enter time in 24-hour format:\n\n"
+                "09:00\n"
+                "13:30\n"
+                "18:45\n"
+                "23:15"
+            )
+            return
+
+        hour, minute = parsed_time
+
+        if mode == "TIME_TEHRAN_NY":
+            source_tz = TEHRAN_TZ
+            target_tz = NEW_YORK_TZ
+            source_name = "TEHRAN"
+            target_name = "NEW YORK"
+
+        else:
+            source_tz = NEW_YORK_TZ
+            target_tz = TEHRAN_TZ
+            source_name = "NEW YORK"
+            target_name = "TEHRAN"
+
+        source_dt = datetime.now(source_tz).replace(
+            hour=hour,
+            minute=minute,
+            second=0,
+            microsecond=0
+        )
+
+        target_dt = source_dt.astimezone(target_tz)
+
+        result = format_converted_time(
+            source_name,
+            source_dt,
+            target_name,
+            target_dt
+        )
+
+        context.user_data.clear()
+
+        await update.message.reply_text(
+            result,
+            reply_markup=dashboard_reply_keyboard()
+        )
+
+        return
+    
     # =====================================================
     # SET ALERT TIME
     # =====================================================
@@ -595,6 +782,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     main_menu_buttons = {
         "📅 NDOG",
         "📆 NWOG",
+        "🕐 TIME CONVERTER",
         "🟢 ACTIVE",
         "📜 HISTORY",
         "⚙️ SETTINGS",
@@ -657,6 +845,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+
+
+        # =================================================
+        # TIME CONVERTER
+        # =================================================
+
+        if text == "🕐 TIME CONVERTER":
+
+            await update.message.reply_text(
+                "🕐 TIME CONVERTER\n\n"
+                "Choose conversion direction:",
+                reply_markup=time_converter_keyboard()
+            )
+
+            return
+        
         # =================================================
         # ACTIVE
         # =================================================
@@ -1077,6 +1281,45 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+        # =====================================================
+    # TIME CONVERTER
+    # =====================================================
+
+    if data == "timeconv:tehran_ny":
+
+        context.user_data["mode"] = "TIME_TEHRAN_NY"
+
+        await query.edit_message_text(
+            "🇮🇷 TEHRAN → 🇺🇸 NEW YORK\n\n"
+            "Enter Tehran time.\n\n"
+            "Use 24-hour format:\n\n"
+            "09:00\n"
+            "13:30\n"
+            "18:45\n"
+            "23:15\n\n"
+            "🔙 Send /cancel to cancel."
+        )
+
+        return
+
+
+    if data == "timeconv:ny_tehran":
+
+        context.user_data["mode"] = "TIME_NY_TEHRAN"
+
+        await query.edit_message_text(
+            "🇺🇸 NEW YORK → 🇮🇷 TEHRAN\n\n"
+            "Enter New York time.\n\n"
+            "Use 24-hour format:\n\n"
+            "09:00\n"
+            "13:30\n"
+            "18:45\n"
+            "23:15\n\n"
+            "🔙 Send /cancel to cancel."
+        )
+
+        return
+    
     # VIEW DETAILS
     if data.startswith("view:"):
         parts = data.split(":")
