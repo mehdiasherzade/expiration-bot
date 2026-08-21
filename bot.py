@@ -1407,8 +1407,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.edit_message_text(
             time_converter_input_message("tehran_ny")
-            )
-            return
+            
+        )
+        return
 
 
     if data == "timeconv:ny_tehran":
