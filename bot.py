@@ -545,6 +545,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_dashboard(update, context)
 
 
+
 # =========================================================
 # TIME CONVERTER
 # =========================================================
@@ -553,49 +554,115 @@ TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 NEW_YORK_TZ = ZoneInfo("America/New_York")
 
 
-def parse_time_input(text: str):
+def parse_datetime_input(text: str):
     """
-    Parse time in HH:MM or H:MM format.
-    Returns (hour, minute) or None.
-    """
-    text = text.strip()
+    Supported formats:
 
-    match = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", text)
-
-    if not match:
-        return None
-
-    hour = int(match.group(1))
-    minute = int(match.group(2))
-
-    return hour, minute
-
-
-def convert_time_between_zones(
-    hour: int,
-    minute: int,
-    from_tz,
-    to_tz
-):
-    """
-    Convert today's time from one timezone to another.
-
-    Returns:
-        converted_datetime
+    18 AUG 2026 18:30
+    18 AUG 18:30
+    2026-08-18 18:30
     """
 
-    now = datetime.now(from_tz)
+    text = text.strip().upper()
 
-    source_dt = datetime(
-        year=now.year,
-        month=now.month,
-        day=now.day,
-        hour=hour,
-        minute=minute,
-        tzinfo=from_tz,
+    # -----------------------------------------------------
+    # Format:
+    # 18 AUG 2026 18:30
+    # -----------------------------------------------------
+    match = re.fullmatch(
+        r"(\d{1,2})\s+([A-Z]{3})\s+(\d{4})\s+([0-2]?\d):([0-5]\d)",
+        text
     )
 
-    return source_dt.astimezone(to_tz)
+    if match:
+        day = int(match.group(1))
+        month_text = match.group(2)
+        year = int(match.group(3))
+        hour = int(match.group(4))
+        minute = int(match.group(5))
+
+        if month_text not in MONTHS:
+            return None
+
+        if hour > 23:
+            return None
+
+        try:
+            return datetime(
+                year,
+                MONTHS[month_text],
+                day,
+                hour,
+                minute
+            )
+        except ValueError:
+            return None
+
+    # -----------------------------------------------------
+    # Format:
+    # 18 AUG 18:30
+    # -----------------------------------------------------
+    match = re.fullmatch(
+        r"(\d{1,2})\s+([A-Z]{3})\s+([0-2]?\d):([0-5]\d)",
+        text
+    )
+
+    if match:
+        day = int(match.group(1))
+        month_text = match.group(2)
+        hour = int(match.group(3))
+        minute = int(match.group(4))
+
+        if month_text not in MONTHS:
+            return None
+
+        if hour > 23:
+            return None
+
+        year = datetime.now(TZ).year
+
+        try:
+            return datetime(
+                year,
+                MONTHS[month_text],
+                day,
+                hour,
+                minute
+            )
+        except ValueError:
+            return None
+
+    # -----------------------------------------------------
+    # Format:
+    # 2026-08-18 18:30
+    # -----------------------------------------------------
+    match = re.fullmatch(
+        r"(\d{4})-(\d{2})-(\d{2})\s+([0-2]?\d):([0-5]\d)",
+        text
+    )
+
+    if match:
+        year = int(match.group(1))
+        month = int(match.group(2))
+        day = int(match.group(3))
+        hour = int(match.group(4))
+        minute = int(match.group(5))
+
+        if hour > 23:
+            return None
+
+        try:
+            return datetime(
+                year,
+                month,
+                day,
+                hour,
+                minute
+            )
+        except ValueError:
+            return None
+
+    return None
 
 
 def time_converter_keyboard():
@@ -621,21 +688,55 @@ def time_converter_keyboard():
     ])
 
 
-def format_converted_time(source_name, source_dt, target_name, target_dt):
-    """
-    Format the final conversion message.
-    """
+def time_converter_input_message(direction):
+    if direction == "tehran_ny":
+        return (
+            "🇮🇷 TEHRAN → 🇺🇸 NEW YORK\n\n"
+            "Enter date & time in Tehran.\n\n"
+            "📌 Format:\n"
+            "DD MMM YYYY HH:MM\n\n"
+            "Examples:\n\n"
+            "18 AUG 2026 18:30\n"
+            "21 AUG 2026 09:00\n"
+            "21 AUG 2026 13:30\n"
+            "21 AUG 2026 18:45\n\n"
+            "You can also omit the year:\n"
+            "21 AUG 18:30\n\n"
+            "🔙 Send /cancel to cancel."
+        )
 
+    return (
+        "🇺🇸 NEW YORK → 🇮🇷 TEHRAN\n\n"
+        "Enter date & time in New York.\n\n"
+        "📌 Format:\n"
+        "DD MMM YYYY HH:MM\n\n"
+        "Examples:\n\n"
+        "18 AUG 2026 18:30\n"
+        "21 AUG 2026 09:00\n"
+        "21 AUG 2026 13:30\n"
+        "21 AUG 2026 18:45\n\n"
+        "You can also omit the year:\n"
+        "21 AUG 18:30\n\n"
+        "🔙 Send /cancel to cancel."
+    )
+
+
+def format_time_converter_result(
+    source_name,
+    source_dt,
+    target_name,
+    target_dt
+):
     source_date = source_dt.strftime("%d %b %Y").upper()
     target_date = target_dt.strftime("%d %b %Y").upper()
 
     source_time = source_dt.strftime("%H:%M")
     target_time = target_dt.strftime("%H:%M")
 
-    if source_date == target_date:
-        day_text = "📅 SAME DAY"
+    if source_dt.date() == target_dt.date():
+        date_status = "📅 SAME DAY"
     else:
-        day_text = (
+        date_status = (
             "📅 DATE CHANGED\n"
             f"{source_date} → {target_date}"
         )
@@ -643,17 +744,21 @@ def format_converted_time(source_name, source_dt, target_name, target_dt):
     return (
         "🕐 TIME CONVERTER\n\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"🇮🇷/🇺🇸 {source_name}\n"
-        f"🕐 {source_time}\n"
-        f"📅 {source_date}\n\n"
-        "⬇️ CONVERTED TO\n\n"
-        f"🌎 {target_name}\n"
-        f"🕐 {target_time}\n"
-        f"📅 {target_date}\n\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        f"{day_text}"
-    )
 
+        f"🌍 {source_name}\n"
+        f"📅 {source_date}\n"
+        f"⏰ {source_time}\n\n"
+
+        "⬇️ CONVERTED TO\n\n"
+
+        f"🌎 {target_name}\n"
+        f"📅 {target_date}\n"
+        f"⏰ {target_time}\n\n"
+
+        "━━━━━━━━━━━━━━━━━━\n\n"
+
+        f"{date_status}"
+    )
 # =========================================================
 # MESSAGE HANDLER
 # =========================================================
@@ -664,8 +769,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-    # =====================================================
-    # CANCEL CURRENT MODE
+        # =====================================================
+    # CANCEL
     # =====================================================
 
     if text.lower() == "/cancel":
@@ -679,50 +784,61 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         return
-    
+
+
     # =====================================================
-    # TIME CONVERTER - ENTER TIME
+    # TIME CONVERTER - ENTER DATE & TIME
     # =====================================================
 
     if mode in ("TIME_TEHRAN_NY", "TIME_NY_TEHRAN"):
 
-        parsed_time = parse_time_input(text)
+        source_dt = parse_datetime_input(text)
 
-        if not parsed_time:
+        if not source_dt:
             await update.message.reply_text(
-                "❌ INVALID TIME\n\n"
-                "Enter time in 24-hour format:\n\n"
-                "09:00\n"
-                "13:30\n"
-                "18:45\n"
-                "23:15"
+                "❌ INVALID DATE & TIME\n\n"
+                "Use this format:\n\n"
+                "DD MMM YYYY HH:MM\n\n"
+                "Examples:\n\n"
+                "18 AUG 2026 18:30\n"
+                "21 AUG 2026 09:00\n"
+                "21 AUG 2026 13:30\n\n"
+                "You can also omit the year:\n"
+                "21 AUG 18:30"
             )
             return
 
-        hour, minute = parsed_time
+        # -------------------------------------------------
+        # TEHRAN → NEW YORK
+        # -------------------------------------------------
 
         if mode == "TIME_TEHRAN_NY":
+
             source_tz = TEHRAN_TZ
             target_tz = NEW_YORK_TZ
+
             source_name = "TEHRAN"
             target_name = "NEW YORK"
 
+        # -------------------------------------------------
+        # NEW YORK → TEHRAN
+        # -------------------------------------------------
+
         else:
+
             source_tz = NEW_YORK_TZ
             target_tz = TEHRAN_TZ
+
             source_name = "NEW YORK"
             target_name = "TEHRAN"
 
-        source_dt = datetime.now(source_tz).replace(
-            hour=hour,
-            minute=minute,
-            second=0,
-            microsecond=0
-        )
+        # Attach source timezone
+        source_dt = source_dt.replace(tzinfo=source_tz)
 
+        # Convert timezone
         target_dt = source_dt.astimezone(target_tz)
 
-        result = format_converted_time(
+        result = format_time_converter_result(
             source_name,
             source_dt,
             target_name,
@@ -1281,7 +1397,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-        # =====================================================
+    # =====================================================
     # TIME CONVERTER
     # =====================================================
 
@@ -1290,17 +1406,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "TIME_TEHRAN_NY"
 
         await query.edit_message_text(
-            "🇮🇷 TEHRAN → 🇺🇸 NEW YORK\n\n"
-            "Enter Tehran time.\n\n"
-            "Use 24-hour format:\n\n"
-            "09:00\n"
-            "13:30\n"
-            "18:45\n"
-            "23:15\n\n"
-            "🔙 Send /cancel to cancel."
-        )
-
-        return
+            time_converter_input_message("tehran_ny")
+            )
+            return
 
 
     if data == "timeconv:ny_tehran":
@@ -1308,18 +1416,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "TIME_NY_TEHRAN"
 
         await query.edit_message_text(
-            "🇺🇸 NEW YORK → 🇮🇷 TEHRAN\n\n"
-            "Enter New York time.\n\n"
-            "Use 24-hour format:\n\n"
-            "09:00\n"
-            "13:30\n"
-            "18:45\n"
-            "23:15\n\n"
-            "🔙 Send /cancel to cancel."
+            time_converter_input_message("ny_tehran")
+        )
+        
+        return
+    if data == "timeconv:ny_tehran":
+
+        context.user_data["mode"] = "TIME_NY_TEHRAN"
+
+        await query.edit_message_text(
+            time_converter_input_message("ny_tehran")
         )
 
         return
-    
     # VIEW DETAILS
     if data.startswith("view:"):
         parts = data.split(":")
