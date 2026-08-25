@@ -1270,6 +1270,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
+    if data.startswith("view:"):
+    parts = data.split(":")
+
+    registration_id = int(parts[1])
+    is_history = parts[2] == "1"
+
+    await view_details(
+        update,
+        context,
+        registration_id,
+        is_history=is_history
+    )
+    return
     if data == "home":
         await send_dashboard(update, context, edit=True)
         return
