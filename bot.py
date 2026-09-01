@@ -95,6 +95,10 @@ def init_db():
             UNIQUE(registration_id, alert_key)
         )
     """)
+
+    # NOTE:
+    # The bot's registrations/alerts are stored in Supabase. This local table is
+    # intentionally kept only for compatibility with the existing local DB.
     conn.commit()
     conn.close()
 
@@ -1270,6 +1274,108 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
+    # =====================================================
+    # EXPIRATION CONFIRMATION CALLBACKS
+    # =====================================================
+
+    if data.startswith("confirm:"):
+        parts = data.split(":", 4)
+        if len(parts) != 5:
+            await query.answer("❌ Invalid confirmation.", show_alert=True)
+            return
+
+        action = parts[1]
+        try:
+            registration_id = int(parts[2])
+        except ValueError:
+            await query.answer("❌ Invalid registration.", show_alert=True)
+            return
+
+        label = parts[3].replace("_", " ")
+        expiration = parse_callback_expiration(parts[4])
+        chat_id = query.message.chat.id
+
+        if not expiration:
+            await query.answer("❌ Invalid expiration date.", show_alert=True)
+            return
+
+        # Security: make sure this registration belongs to this chat.
+        row_response = (
+            supabase
+            .table("registrations")
+            .select("*")
+            .eq("id", registration_id)
+            .eq("chat_id", chat_id)
+            .limit(1)
+            .execute()
+        )
+        row = row_response.data[0] if row_response.data else None
+
+        if not row:
+            await query.answer("❌ Registration not found.", show_alert=True)
+            return
+
+        settings = get_user_settings(chat_id)
+        user_tz = ZoneInfo(settings.get("timezone", TIMEZONE))
+        now = datetime.now(user_tz)
+
+        if action == "done":
+            update_confirmation(
+                registration_id,
+                label,
+                expiration,
+                status="CONFIRMED",
+                confirmed_at=now.isoformat(),
+                remind_at=None,
+            )
+            await query.edit_message_text(
+                "✅ EXPIRATION CONFIRMED\n\n"
+                f"{row['display_name']}\n\n"
+                f"{label}\n\n"
+                f"Expiration:\n{short_date(expiration)} {expiration.year}\n\n"
+                "This item is now marked as completed and "
+                "no more reminders will be sent."
+            )
+            return
+
+        if action == "snooze2":
+            remind_at = now + timedelta(hours=2)
+            update_confirmation(
+                registration_id,
+                label,
+                expiration,
+                status="PENDING",
+                remind_at=remind_at.isoformat(),
+            )
+            await query.edit_message_text(
+                "⏰ REMINDER SET\n\n"
+                f"{row['display_name']}\n"
+                f"{label}\n\n"
+                "I'll remind you again in 2 hours."
+            )
+            return
+
+        if action == "stop":
+            update_confirmation(
+                registration_id,
+                label,
+                expiration,
+                status="STOPPED",
+                remind_at=None,
+                stopped_at=now.isoformat(),
+            )
+            await query.edit_message_text(
+                "🛑 REMINDERS STOPPED\n\n"
+                f"{row['display_name']}\n"
+                f"{label}\n\n"
+                "The expiration remains in your history, "
+                "but I won't send more confirmation reminders."
+            )
+            return
+
+        await query.answer("❌ Unknown action.", show_alert=True)
+        return
+
     if data.startswith("view:"):
         parts = data.split(":")
 
@@ -1487,9 +1593,13 @@ def mark_alert_sent(registration_id, alert_key):
 # SEND ALERT
 # =========================================================
 
-async def send_alert(context, chat_id, message):
+async def send_alert(context, chat_id, message, reply_markup=None):
     try:
-        await context.bot.send_message(chat_id=chat_id, text=message)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=message,
+            reply_markup=reply_markup,
+        )
         return True
     except Exception as e:
         print("Alert send error:", e)
@@ -1523,7 +1633,245 @@ def build_alert_message(name, label, registered, expiration, level):
     calendar_left = calendar_days_remaining(expiration, datetime.now(TZ).date())
     return (
         f"{title}\n\n{name}\n\n{label}\n\nExpiration:\n{short_date(expiration)} {expiration.year}\n\nStatus:\n{status}\n\n📅 Calendar Days Left: {calendar_left}\n\nRegistered:\n{short_date(registered)} {registered.year}"
+        "\n\n━━━━━━━━━━━━━━━━━━\n\n"
+        "⚠️ Please confirm this expiration.\n"
+        "If you forget, I'll remind you again."
     )
+
+# =========================================================
+# EXPIRATION CONFIRMATION / REMINDER SYSTEM
+# =========================================================
+
+# SUPABASE MIGRATION (run once in Supabase SQL Editor):
+#
+# create table if not exists expiration_confirmations (
+#     id bigint generated by default as identity primary key,
+#     registration_id bigint not null,
+#     chat_id bigint not null,
+#     label text not null,
+#     expiration date not null,
+#     status text not null default 'PENDING',
+#     remind_at timestamptz,
+#     reminder_count integer not null default 0,
+#     created_at timestamptz not null default now(),
+#     last_reminded_at timestamptz,
+#     confirmed_at timestamptz,
+#     stopped_at timestamptz,
+#     unique (registration_id, label, expiration)
+# );
+#
+
+REMINDER_AFTER_HOURS = 2
+REMINDER_AFTER_SECOND_HOURS = 6
+
+
+def confirmation_keyboard(registration_id, label, expiration):
+    """Buttons shown on expiration-day and reminder messages."""
+    safe_label = label.replace(" ", "_")
+    exp = expiration.isoformat()
+
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "✅ YES, DONE",
+                callback_data=f"confirm:done:{registration_id}:{safe_label}:{exp}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⏰ REMIND ME IN 2H",
+                callback_data=f"confirm:snooze2:{registration_id}:{safe_label}:{exp}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🛑 STOP REMINDERS",
+                callback_data=f"confirm:stop:{registration_id}:{safe_label}:{exp}",
+            ),
+        ],
+    ])
+
+
+def get_confirmation(registration_id, label, expiration):
+    response = (
+        supabase
+        .table("expiration_confirmations")
+        .select("*")
+        .eq("registration_id", registration_id)
+        .eq("label", label)
+        .eq("expiration", expiration.isoformat())
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
+def create_pending_confirmation(registration_id, label, expiration, chat_id, timezone):
+    """Create a pending confirmation exactly once."""
+    now = datetime.now(timezone)
+    existing = get_confirmation(registration_id, label, expiration)
+
+    if existing:
+        return existing
+
+    data = {
+        "registration_id": registration_id,
+        "chat_id": chat_id,
+        "label": label,
+        "expiration": expiration.isoformat(),
+        "status": "PENDING",
+        "remind_at": (now + timedelta(hours=REMINDER_AFTER_HOURS)).isoformat(),
+        "created_at": now.isoformat(),
+    }
+
+    response = (
+        supabase
+        .table("expiration_confirmations")
+        .upsert(
+            data,
+            on_conflict="registration_id,label,expiration",
+        )
+        .execute()
+    )
+    return response.data[0] if response.data else data
+
+
+def update_confirmation(registration_id, label, expiration, **changes):
+    response = (
+        supabase
+        .table("expiration_confirmations")
+        .update(changes)
+        .eq("registration_id", registration_id)
+        .eq("label", label)
+        .eq("expiration", expiration.isoformat())
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
+def confirmation_reminder_message(name, label, registered, expiration, reminder_number=1):
+    if reminder_number == 1:
+        title = "⏰ EXPIRATION REMINDER"
+        intro = "You haven't confirmed this expiration yet."
+    else:
+        title = "🚨 EXPIRATION STILL PENDING"
+        intro = "This expiration is still waiting for your confirmation."
+
+    return (
+        f"{title}\n\n"
+        f"{name}\n\n"
+        f"{label}\n\n"
+        f"Expiration:\n{short_date(expiration)} {expiration.year}\n\n"
+        f"Status:\n🔴 EXPIRED TODAY\n\n"
+        f"⚠️ {intro}\n\n"
+        f"Registered:\n{short_date(registered)} {registered.year}"
+    )
+
+
+def parse_callback_expiration(value):
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def check_confirmation_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """Send due follow-up reminders for unconfirmed expiration-day items."""
+    try:
+        response = (
+            supabase
+            .table("expiration_confirmations")
+            .select("*")
+            .eq("status", "PENDING")
+            .execute()
+        )
+        confirmations = response.data or []
+
+        for item in confirmations:
+            chat_id = item["chat_id"]
+            label = item["label"]
+            expiration = parse_callback_expiration(item["expiration"])
+            if not expiration:
+                continue
+
+            settings = get_user_settings(chat_id)
+            user_tz = ZoneInfo(settings.get("timezone", TIMEZONE))
+            now = datetime.now(user_tz)
+
+            remind_at_text = item.get("remind_at")
+            if not remind_at_text:
+                continue
+
+            try:
+                remind_at = datetime.fromisoformat(remind_at_text)
+                if remind_at.tzinfo is None:
+                    remind_at = remind_at.replace(tzinfo=user_tz)
+            except ValueError:
+                continue
+
+            if now < remind_at:
+                continue
+
+            # A pending confirmation is only relevant on its expiration day.
+            if now.date() != expiration:
+                continue
+
+            registration_id = item["registration_id"]
+            row_response = (
+                supabase
+                .table("registrations")
+                .select("*")
+                .eq("id", registration_id)
+                .eq("chat_id", chat_id)
+                .limit(1)
+                .execute()
+            )
+            row = row_response.data[0] if row_response.data else None
+            if not row:
+                continue
+
+            registered = date.fromisoformat(row["registered_date"])
+            reminder_number = int(item.get("reminder_count") or 0) + 1
+
+            # After the first reminder, wait another 4 hours. After the second,
+            # stop automatically for the day so the bot never spams the user.
+            if reminder_number == 1:
+                next_reminder = now + timedelta(hours=4)
+            else:
+                next_reminder = now.replace(hour=23, minute=59, second=0, microsecond=0)
+
+            message = confirmation_reminder_message(
+                row["display_name"],
+                label,
+                registered,
+                expiration,
+                reminder_number=reminder_number,
+            )
+
+            sent = await send_alert(
+                context,
+                chat_id,
+                message,
+                reply_markup=confirmation_keyboard(
+                    registration_id, label, expiration
+                ),
+            )
+
+            if sent:
+                update_confirmation(
+                    registration_id,
+                    label,
+                    expiration,
+                    remind_at=next_reminder.isoformat(),
+                    reminder_count=reminder_number,
+                    last_reminded_at=now.isoformat(),
+                )
+
+        return True
+    except Exception as e:
+        print("Confirmation reminder error:", e)
+        return False
+
 
 # =========================================================
 # AUTOMATIC ALERT CHECK
@@ -1580,7 +1928,30 @@ async def check_expirations(context: ContextTypes.DEFAULT_TYPE):
             if alert_was_sent(registration_id, alert_key):
                 continue
             message = build_alert_message(name, label, registered, expiration, level)
-            sent = await send_alert(context, chat_id, message)
+
+            # On expiration day, create a confirmation task and attach buttons.
+            if level == "EXPIRATION_DAY":
+                create_pending_confirmation(
+                    registration_id,
+                    label,
+                    expiration,
+                    chat_id,
+                    user_tz,
+                )
+                markup = confirmation_keyboard(
+                    registration_id,
+                    label,
+                    expiration,
+                )
+            else:
+                markup = None
+
+            sent = await send_alert(
+                context,
+                chat_id,
+                message,
+                reply_markup=markup,
+            )
             if sent:
                 mark_alert_sent(registration_id, alert_key)
 
@@ -1614,6 +1985,14 @@ def run_bot():
         interval=60,
         first=10,
         name="expiration-check"
+    )
+
+    # Check pending confirmations every minute too.
+    application.job_queue.run_repeating(
+        check_confirmation_reminders,
+        interval=60,
+        first=20,
+        name="confirmation-reminder-check"
     )
     
     print("Trading Expiration Bot PRO v3 UI is running...")
