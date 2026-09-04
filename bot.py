@@ -549,6 +549,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_dashboard(update, context)
 
 
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text(
+        "❌ CANCELLED\n\nBack to dashboard.",
+        reply_markup=dashboard_reply_keyboard()
+    )
+
+
 
 # =========================================================
 # TIME CONVERTER
@@ -1877,83 +1885,126 @@ async def check_confirmation_reminders(context: ContextTypes.DEFAULT_TYPE):
 # AUTOMATIC ALERT CHECK
 # =========================================================
 
+def fetch_all_registrations(page_size: int = 1000):
+    """Fetch registrations with pagination so rows beyond the
+    PostgREST default limit are never silently skipped."""
+    rows = []
+    offset = 0
+    while True:
+        response = (
+            supabase
+            .table("registrations")
+            .select("*")
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        data = response.data or []
+        rows.extend(data)
+        if len(data) < page_size:
+            break
+        offset += page_size
+    return rows
+
+
 async def check_expirations(context: ContextTypes.DEFAULT_TYPE):
-    
+    try:
+        rows = fetch_all_registrations()
 
-    response = (
-        supabase
-        .table("registrations")
-        .select("*")
-        .execute()
-    )
+        settings_cache = {}
 
-    rows = response.data or []
-    for row in rows:
-        registration_id = row["id"]
-        name = row["display_name"]
-        chat_id = row["chat_id"]
+        for row in rows:
+            try:
+                registration_id = row["id"]
+                name = row["display_name"]
+                chat_id = row["chat_id"]
 
-        settings = get_user_settings(chat_id)
-        
-        user_tz = ZoneInfo(settings.get("timezone", TIMEZONE))
-        
-        today = datetime.now(user_tz).date()
-        
-        if not settings.get("alerts_enabled", True):
-            continue
+                if chat_id not in settings_cache:
+                    settings_cache[chat_id] = get_user_settings(chat_id)
+                settings = settings_cache[chat_id]
 
-        current_hour = int(settings.get("alert_hour", ALERT_HOUR))
-        current_minute = int(settings.get("alert_minute", ALERT_MINUTE))
+                if not settings.get("alerts_enabled", True):
+                    continue
 
-        now = datetime.now(user_tz)
+                user_tz = ZoneInfo(settings.get("timezone", TIMEZONE))
+                now = datetime.now(user_tz)
+                today = now.date()
 
-        if now.hour != current_hour or now.minute != current_minute:
-            continue
-        registered = date.fromisoformat(row["registered_date"])
-        expirations = []
-        if row["kind"] == "NDOG":
-            expirations.append(("NDOG", row["ndog_expiration"]))
-        else:
-            expirations.extend([
-                ("5 WEEKS", row["nwog_5_expiration"]),
-                ("7 WEEKS", row["nwog_7_expiration"]),
-                ("8 WEEKS", row["nwog_8_expiration"]),
-            ])
-        for label, expiration_text in expirations:
-            expiration = date.fromisoformat(expiration_text)
-            level = alert_level(expiration, today)
-            if not level:
-                continue
-            alert_key = f"{label}_{level}_{expiration.isoformat()}"
-            if alert_was_sent(registration_id, alert_key):
-                continue
-            message = build_alert_message(name, label, registered, expiration, level)
-
-            # On expiration day, create a confirmation task and attach buttons.
-            if level == "EXPIRATION_DAY":
-                create_pending_confirmation(
-                    registration_id,
-                    label,
-                    expiration,
-                    chat_id,
-                    user_tz,
+                alert_hour = int(settings.get("alert_hour", ALERT_HOUR))
+                alert_minute = int(settings.get("alert_minute", ALERT_MINUTE))
+                alert_time = now.replace(
+                    hour=alert_hour,
+                    minute=alert_minute,
+                    second=0,
+                    microsecond=0,
                 )
-                markup = confirmation_keyboard(
-                    registration_id,
-                    label,
-                    expiration,
-                )
-            else:
-                markup = None
 
-            sent = await send_alert(
-                context,
-                chat_id,
-                message,
-                reply_markup=markup,
-            )
-            if sent:
-                mark_alert_sent(registration_id, alert_key)
+                # Catch-up: send any time on/after the alert time.
+                # The alerts table dedupes, so this never sends twice.
+                if now < alert_time:
+                    continue
+
+                registered = date.fromisoformat(row["registered_date"])
+                expirations = []
+                if row["kind"] == "NDOG":
+                    if row.get("ndog_expiration"):
+                        expirations.append(("NDOG", row["ndog_expiration"]))
+                else:
+                    for label, key in (
+                        ("5 WEEKS", "nwog_5_expiration"),
+                        ("7 WEEKS", "nwog_7_expiration"),
+                        ("8 WEEKS", "nwog_8_expiration"),
+                    ):
+                        if row.get(key):
+                            expirations.append((label, row[key]))
+
+                for label, expiration_text in expirations:
+                    expiration = date.fromisoformat(expiration_text)
+                    level = alert_level(expiration, today)
+                    if not level:
+                        continue
+                    alert_key = f"{label}_{level}_{expiration.isoformat()}"
+                    if alert_was_sent(registration_id, alert_key):
+                        continue
+                    message = build_alert_message(name, label, registered, expiration, level)
+
+                    # Send the alert first; confirmation bookkeeping must
+                    # never block the actual notification.
+                    markup = None
+                    if level == "EXPIRATION_DAY":
+                        markup = confirmation_keyboard(
+                            registration_id,
+                            label,
+                            expiration,
+                        )
+
+                    sent = await send_alert(
+                        context,
+                        chat_id,
+                        message,
+                        reply_markup=markup,
+                    )
+                    if sent:
+                        mark_alert_sent(registration_id, alert_key)
+
+                        if level == "EXPIRATION_DAY":
+                            try:
+                                create_pending_confirmation(
+                                    registration_id,
+                                    label,
+                                    expiration,
+                                    chat_id,
+                                    user_tz,
+                                )
+                            except Exception as confirm_error:
+                                print("Confirmation create error:", confirm_error)
+            except Exception as row_error:
+                print(f"Alert row error (id={row.get('id')}):", row_error)
+                continue
+
+        return True
+    except Exception as e:
+        print("Expiration check error:", e)
+        return False
 
 # =========================================================
 # TEST ALERT
@@ -1976,6 +2027,7 @@ def run_bot():
     application = Application.builder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("cancel", cancel))
     application.add_handler(CommandHandler("testalert", test_alert))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(callback_handler))
